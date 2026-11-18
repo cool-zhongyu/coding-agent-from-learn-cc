@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.agent/
+.memory/
+.transcripts/
+.tasks/
+.task_outputs/
+.mailboxes/
+.scheduled_tasks.json
