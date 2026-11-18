@@ -10,7 +10,7 @@ import time
 from src.lifecycle import TurnSession
 from src.config import ENABLE_PROMPT_CACHE
 from src.config import client, CLI_ACTIVE, CONTINUATION_PROMPT, DEFAULT_MAX_TOKENS, ESCALATED_MAX_TOKENS, MAX_RECOVERY_RETRIES, PROMPT, READLINE_AVAILABLE
-from src.context import ContextManager, RecoveryState, block_type, is_prompt_too_long_error, remember_after_turn, update_context, with_retry
+from src.context import ContextManager, RecoveryState, block_type, count_input_tokens, is_prompt_too_long_error, remember_after_turn, update_context, with_retry
 from src.schedule import CronJob, acknowledge_cron_jobs, consume_cron_queue, restore_cron_jobs
 from src.task import assemble_system_prompt, collect_background_results, has_pending_background, release_completed_assignment, should_run_background, start_background_task
 from src.team import consume_lead_inbox, format_team_events, has_tool_use
@@ -26,9 +26,10 @@ rounds_since_todo = 0
 agent_lock = threading.Lock()
 
 
-def prepare_context(messages: list, active_request: str, session=None) -> list:
+def prepare_context(messages: list, active_request: str, session=None, *, count_tokens=None) -> list:
     return ContextManager().prepare_messages(
-        messages, active_request, session, enable_cache=ENABLE_PROMPT_CACHE
+        messages, active_request, session, enable_cache=ENABLE_PROMPT_CACHE,
+        count_tokens=count_tokens,
     )
 
 
@@ -97,8 +98,15 @@ def _with_conversation_cache_control(messages: list) -> list:
 
 
 def call_llm(messages: list, context: dict, tools: list,
-             state: RecoveryState, max_tokens: int):
+             state: RecoveryState, max_tokens: int, *, session=None):
     system = assemble_system_prompt(context)
+    if session is not None:
+        prepare_context(
+            messages, session.request, session,
+            count_tokens=lambda history: count_input_tokens(
+                history, model=state.current_model, system=system, tools=tools,
+            ),
+        )
     request = {
         "model": state.current_model,
         "system": system,
@@ -170,11 +178,10 @@ def _agent_loop(messages: list, context: dict, active_request: str, *, resume_ru
                              "content": "<reminder>Update your todos.</reminder>"})
             rounds_since_todo = 0
 
-        prepare_context(messages, active_request, session)
         context = update_context(context, messages)
 
         try:
-            response = call_llm(messages, context, BUILTIN_TOOLS, state, max_tokens)
+            response = call_llm(messages, context, BUILTIN_TOOLS, state, max_tokens, session=session)
             session.tokens += sum(int(getattr(response.usage, key, 0) or 0) for key in
                                   ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
         except Exception as e:

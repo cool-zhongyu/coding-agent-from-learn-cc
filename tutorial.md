@@ -918,7 +918,7 @@ SDK 返回的内容块不是普通字典时，通过 `model_dump()` 转换成可
   → 必要时先保存未压缩 transcript
   → tool_result_budget()
   → micro_compact()
-  → estimate_size() 超限时 compact_history()
+  → 输入 token 超限时 compact_history()
 ```
 
 系统提示还会按 Codex 的 `AGENTS.md` 层级规则加载项目根目录和当前任务目录下的说明，
@@ -932,13 +932,15 @@ SDK 返回的内容块不是普通字典时，通过 `model_dump()` 转换成可
 
 第二层是 `micro_compact()`。它保留最近 3 条已消费的工具结果，对更早且较长的结果换成占位文本；刚返回、模型还没读过的结果会被保护。否则模型刚请求读取一个文件，却在下一次请求前被删掉内容，就失去了调用意义。
 
-第三层是模型摘要。`estimate_size()` 对 JSON 序列化后的字符长度估计，超过 `CONTEXT_LIMIT=50000` 时调用 `compact_history()`。这个 50,000 是估算字符阈值，不能称为精确 50,000 token。
+主循环通过服务商的 `messages.count_tokens` 统计处理后的消息、系统提示和工具定义。默认使用 1,000,000 token 窗口，预留 16,000 输出 token 和 4,000 计数余量，输入超过 980,000 token 时调用 `compact_history()`。兼容服务没有计数端点或计数失败时，继续请求模型，由上下文过长后的应急压缩处理。
 
 ### 11.3 压缩时保留什么
 
 摘要要求保留目标、重要发现、修改文件、剩余工作和用户约束。新的上下文明确分为当前权威请求与不可信参考状态，避免摘要里的历史文本变成新增授权。
 
-正常主循环没有调用 `snip_compact()`；它虽然存在并被导入，不代表已经在主链中删除中间消息。模型主动请求 `compact` 时，主循环先形成该工具的结果，再压缩完整轮次，避免留下不配对调用。
+摘要会尝试读取完整历史。如果服务商拒绝整段输入的长度，程序会分段摘要，再合并各段的结果。
+
+模型主动请求 `compact` 时，主循环先形成该工具的结果，再压缩完整轮次，避免留下不配对调用。
 
 服务端返回上下文过长错误时，还会尝试一次 `reactive_compact()`。它保留尾部消息，必要时保留成对的工具调用与结果，摘要失败则用较简单的说明降级。
 
@@ -1519,7 +1521,8 @@ if __name__ == "__main__":
 | 名称 | 默认或作用 | 注意事项 |
 |---|---|---|
 | WORKDIR | 默认项目根目录 | 影响文件工具、状态、记忆、Skill 和任务目录 |
-| LLM_MODEL_ID | 源码默认 `claude-sonnet-4-5` | 样例文件有占位符；必须使用实际可用的模型 ID |
+| LLM_MODEL_ID | `claude-sonnet-5-5` | 使用兼容服务时可填写该服务的模型 ID |
+| AGENT_CONTEXT_WINDOW_TOKENS | 1000000 | 使用其他上下文长度的模型时可覆盖 |
 | ANTHROPIC_API_KEY / LLM_API_KEY | 模型凭据 | 前者优先；不要公开 |
 | ANTHROPIC_BASE_URL / LLM_BASE_URL | 模型服务地址 | 前者优先；省略地址时使用 SDK 默认服务 |
 | LLM_TIMEOUT | 客户端默认 60 秒 | 与 shell 的 120 秒不是同一个超时 |
@@ -1540,7 +1543,7 @@ if __name__ == "__main__":
 |---|---|---|
 | DEFAULT_MAX_TOKENS | 8000 | config.py，主循环输出额度 |
 | ESCALATED_MAX_TOKENS | 16000 | config.py |
-| CONTEXT_LIMIT | 50000 | config.py，字符估算阈值 |
+| CONTEXT_LIMIT_TOKENS | 980000 | config.py，从窗口中扣除输出额度和计数余量 |
 | KEEP_RECENT_TOOL_RESULTS | 3 | config.py |
 | PERSIST_THRESHOLD | 30000 | config.py |
 | MAX_RETRIES | 3 | config.py |

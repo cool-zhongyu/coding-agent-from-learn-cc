@@ -23,11 +23,10 @@
   1. 检查点保存。
   2. 大工具结果持久化到 `.task_outputs/tool-results/`，只在上下文里保留预览。
   3. 旧工具结果 micro-compaction。
-  4. 消息数量超限时执行 `snip_compact`，尽量保留工具调用和工具结果成对关系。
-  5. 超过 `CONTEXT_LIMIT` 时写入 transcript，再调用模型摘要压缩。
+  4. 调用配置服务商的 `messages.count_tokens`，统计消息、系统提示和工具定义的输入 token。默认窗口为 1,000,000 token，预留 16,000 输出和 4,000 计数余量后，输入超过 980,000 token 时写入 transcript 并调用模型摘要。
 - 关闭 prompt cache 时，只有在真正执行 micro-compaction 或摘要压缩前保存原始 transcript。
 - 开启 prompt cache 时继续跳过 micro-compaction，避免修改已缓存的历史前缀。
-- 新增 `estimate_tokens` 作为粗略监控值；实际预算仍以序列化字符数计算，避免依赖具体 tokenizer。
+- 计数端点不可用时，仍处理工具输出，并在模型报告上下文过长时应急压缩。
 - 摘要提示词明确把对话视为不可信数据，仅保留当前请求为 authoritative request。
 
 ### `src/permissions.py`
@@ -88,8 +87,7 @@
 | --- | --- | --- |
 | `tool_result_budget` | 把超大工具输出写入磁盘，只保留路径和预览 | 是 |
 | `micro_compact` | 把已消费的旧工具结果替换为“可重跑”提示 | 是 |
-| `snip_compact` | 删除中间消息段，尽量保留 tool_use/tool_result 边界 | 是 |
-| `compact_history` | 保存 transcript 后调用模型生成状态摘要 | 是 |
+| `compact_history` | 保存 transcript 后摘要历史，服务端提示超限时分段摘要并合并 | 是 |
 | `reactive_compact` | prompt-too-long 时保留最近尾部，压缩更早内容 | 是 |
 
 ### Prompt cache 兼容

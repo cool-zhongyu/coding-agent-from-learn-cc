@@ -39,7 +39,11 @@ Ctrl+C 保存中断状态。恢复不自动重放中断的工具调用：模型�
   `.scheduled_tasks.json` 在首次访问时导入一次，旧文件保留；不做破坏性删除。
 - checkpoint 在工具轮次、工具执行前和压缩前保存；包含计划、消息、修改文件、
   已执行动作、失败尝试、重要输出、下一步及当前 run 的独立证据。
-  原始 transcript 在结果被 micro-compaction 替换前保存，正常路径不使用 snip。
+  预处理包含工具输出落盘和旧结果替换。
+  默认模型为 `claude-sonnet-5-5`，上下文窗口为 1,000,000 token，预留 20,000 token 后，
+  输入超过 980,000 token 时生成摘要。可通过 `AGENT_CONTEXT_WINDOW_TOKENS` 配置其他模型的窗口。
+  计数覆盖消息、系统提示和工具定义。计数端点不可用时仍可发起模型请求，
+  由上下文过长后的应急压缩处理输入限制。
 - 工具执行前由 dispatcher 直接调用 `authorize_tool` 做权限判定，统一覆盖主 Agent、
   teammate、subagent 和后台 shell。
 - 可选接入 Langfuse Python SDK v5：每个 run 生成 `agent-run` 根 observation，

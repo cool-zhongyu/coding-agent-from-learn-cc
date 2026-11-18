@@ -313,11 +313,22 @@ class PromptCacheTests(unittest.TestCase):
         from src import agentLoop as loop
         from src.context import RecoveryState
         response = SimpleNamespace(usage=SimpleNamespace(input_tokens=1, output_tokens=1))
+        history = [{"role": "user", "content": "hello"}]
+        session = SimpleNamespace(request="hello", checkpoint=lambda messages: None)
         with patch.object(loop, "assemble_system_prompt", return_value="system"), \
              patch.object(loop, "ENABLE_PROMPT_CACHE", True), \
-             patch.object(loop, "client") as client:
+             patch.object(loop, "client") as client, \
+             patch("src.context.client") as counter_client:
             client.messages.create.return_value = response
-            loop.call_llm([{"role": "user", "content": "hello"}], {}, [], RecoveryState(), 10)
+            model = RecoveryState()
+            tools = [{"name": "test", "input_schema": {"type": "object"}}]
+            counter = counter_client.client.with_options.return_value.messages.count_tokens
+            counter.return_value = SimpleNamespace(input_tokens=100)
+            loop.call_llm(history, {}, tools, model, 10, session=session)
+        counter_client.client.with_options.assert_called_once_with(max_retries=0)
+        counter.assert_called_once_with(
+            model=model.current_model, system="system", messages=history, tools=tools, timeout=15,
+        )
         kwargs = client.messages.create.call_args.kwargs
         self.assertEqual(kwargs["system"], [{
             "type": "text", "text": "system",
@@ -363,26 +374,85 @@ class ContextManagementTests(unittest.TestCase):
                 text = load_agents_instructions(nested)
             self.assertLess(text.index("root instruction"), text.index("nested instruction"))
 
-    def test_context_manager_prepares_without_duplicating_messages(self):
+    def test_context_manager_keeps_long_history_within_token_budget(self):
         from src.context import ContextManager
-        messages = [{"role": "user", "content": "hello"}]
-        prepared = ContextManager().prepare_messages(messages, "hello", enable_cache=True)
+        original = [
+            {"role": "user" if i % 2 == 0 else "assistant", "content": f"message {i}"}
+            for i in range(70)
+        ]
+        messages = list(original)
+        prepared = ContextManager({"limit_tokens": 980_000}).prepare_messages(
+            messages, "continue", enable_cache=True, count_tokens=lambda _: 979_999,
+        )
         self.assertIs(prepared, messages)
-        self.assertEqual(messages[0]["content"], "hello")
+        self.assertEqual(messages, original)
+
+    def test_summary_preserves_oversized_transcript_tail_by_splitting(self):
+        from anthropic import BadRequestError
+        from httpx import Request, Response
+        from src.context import summarize_history
+
+        messages = [{"role": "user", "content": "前" * 85_000 + "important tail"}]
+        too_long = BadRequestError(
+            "prompt is too long",
+            response=Response(400, request=Request("POST", "https://example.invalid")),
+            body=None,
+        )
+        replies = [
+            SimpleNamespace(content=[TextBlock(type="text", text=text)])
+            for text in ("early facts", "recent facts", "combined facts")
+        ]
+        with patch("src.context.client") as client:
+            create = client.messages.create
+            create.side_effect = [too_long, *replies]
+            self.assertEqual(summarize_history(messages), "combined facts")
+        payloads = [call.kwargs["messages"][0]["content"] for call in create.call_args_list]
+        self.assertEqual(len(payloads), 4)
+        self.assertEqual(payloads[1] + payloads[2], payloads[0])
+        self.assertIn("important tail", payloads[2])
+        self.assertEqual(json.loads(payloads[3]), ["early facts", "recent facts"])
 
     def test_context_manager_compacts_when_over_limit(self):
         from src.context import ContextManager
-        messages = [{"role": "user", "content": "x" * 60000}]
-        with patch(
+        messages = [{"role": "user", "content": "short text"}]
+        manager = ContextManager({"limit_tokens": 10})
+        with patch("src.context.write_transcript"), patch(
             "src.context.compact_history",
             return_value=[{"role": "user", "content": "summary"}],
         ) as compact:
-            prepared = ContextManager().prepare_messages(
-                messages, "request", enable_cache=True
+            manager.prepare_messages(
+                messages, "request", enable_cache=True, count_tokens=lambda _: 10,
+            )
+            compact.assert_not_called()
+            prepared = manager.prepare_messages(
+                messages, "request", enable_cache=True, count_tokens=lambda _: 11,
             )
         self.assertIs(prepared, messages)
         self.assertEqual(compact.call_count, 1)
         self.assertEqual(messages[0]["content"], "summary")
+
+    def test_unsupported_token_counter_does_not_block_model_request(self):
+        from anthropic import NotFoundError
+        from httpx import Request, Response
+        from src import agentLoop as loop
+        from src.context import RecoveryState
+
+        history = [{"role": "user", "content": "x" * 60_000}]
+        session = SimpleNamespace(request="continue", checkpoint=lambda messages: None)
+        with patch.object(loop, "assemble_system_prompt", return_value="system"), \
+             patch.object(loop, "ENABLE_PROMPT_CACHE", False), \
+             patch.object(loop, "client") as client, \
+             patch("src.context.client") as counter_client, \
+             patch("src.context.compact_history") as compact:
+            counter = counter_client.client.with_options.return_value.messages.count_tokens
+            counter.side_effect = NotFoundError(
+                "unsupported", response=Response(404, request=Request("POST", "https://example.invalid")),
+                body=None,
+            )
+            client.messages.create.return_value = SimpleNamespace(usage=SimpleNamespace())
+            loop.call_llm(history, {}, [], RecoveryState(), 10, session=session)
+        compact.assert_not_called()
+        self.assertIs(client.messages.create.call_args.kwargs["messages"], history)
 
 
 class VectorTests(unittest.TestCase):

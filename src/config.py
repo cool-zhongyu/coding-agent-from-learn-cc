@@ -33,7 +33,8 @@ load_dotenv(ENV_FILE)
 WORKDIR = Path(
     os.getenv("WORKDIR", PROJECT_ROOT)
 ).resolve()
-MODEL = os.getenv("LLM_MODEL_ID", "claude-sonnet-4-5")
+DEFAULT_MODEL = "claude-sonnet-5-5"
+MODEL = os.getenv("LLM_MODEL_ID") or DEFAULT_MODEL
 ENABLE_PROMPT_CACHE = os.getenv("AGENT_PROMPT_CACHE", "0") == "1"
 PRIMARY_MODEL = MODEL
 FALLBACK_MODEL = os.getenv("LLM_MODEL_ID")
@@ -48,7 +49,11 @@ MAX_RETRIES = 3
 MAX_CONSECUTIVE_529 = 2
 MAX_RECOVERY_RETRIES = 2
 BASE_DELAY_MS = 500
-CONTEXT_LIMIT = 50000
+CONTEXT_WINDOW_TOKENS = int(os.getenv("AGENT_CONTEXT_WINDOW_TOKENS", "1000000"))
+# Reserve the escalated output budget plus room for token count variance.
+CONTEXT_LIMIT_TOKENS = CONTEXT_WINDOW_TOKENS - ESCALATED_MAX_TOKENS - 4_000
+if CONTEXT_LIMIT_TOKENS <= 0:
+    raise ValueError("AGENT_CONTEXT_WINDOW_TOKENS must exceed 20000")
 KEEP_RECENT_TOOL_RESULTS = 3
 PERSIST_THRESHOLD = 30000
 CONTINUATION_PROMPT = "Continue from the previous response. Do not repeat completed work."
@@ -110,11 +115,7 @@ class myLLM:
         # 1. 读取配置
         # -------------------------
 
-        self.model = (
-            model
-            or os.getenv("LLM_MODEL_ID")
-            or "claude-sonnet-4-5"
-        )
+        self.model = model or os.getenv("LLM_MODEL_ID") or DEFAULT_MODEL
 
         self.api_key = (
             api_key
