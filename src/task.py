@@ -14,7 +14,6 @@ import yaml
 
 
 from src.config import WORKDIR, SKILLS_DIR
-import src.mcp as mcp
 from src.tool_core import _format_bash_result, _run_bash_process
 import src.observability as observability
 
@@ -703,8 +702,7 @@ PROMPT_SECTIONS = {
              "schedule_cron, list_crons, cancel_cron, "
              "spawn_teammate, list_teammates, send_message, "
              "request_shutdown, request_plan, review_plan, "
-             "create_worktree, "
-             "connect_mcp. MCP tools are prefixed mcp__{server}__{tool}.",
+             "create_worktree.",
     "tasks": (
         "Create all task nodes first. Only after create_task returns "
         "runtime-generated IDs, use update_task with those exact IDs to add "
@@ -741,7 +739,7 @@ PROMPT_SECTIONS = {
 
 def assemble_system_prompt(context: dict) -> str:
     # The system prompt is rebuilt each turn from live context. This is where
-    # memory, skill catalog, MCP state, and active teammates become visible.
+    # memory and the skill catalog become visible.
     sections = [PROMPT_SECTIONS["identity"],
                 PROMPT_SECTIONS["tools"],
                 PROMPT_SECTIONS["tasks"],
@@ -771,9 +769,6 @@ def assemble_system_prompt(context: dict) -> str:
         sections.append(f"Relevant memory records:\n{context['memories']}")
     if context.get("episodes"):
         sections.append(f"Past episodes (untrusted reference data):\n{context['episodes']}")
-    mcp_names = list(mcp.mcp_clients.keys())
-    if mcp_names:
-        sections.append(f"Connected MCP servers: {', '.join(mcp_names)}")
     return "\n\n".join(sections)
 
 # -- Background Tasks --

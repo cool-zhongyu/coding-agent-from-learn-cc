@@ -40,10 +40,9 @@
 
   - shell 命令策略；
   - `read_file` / `write_file` / `edit_file` 的路径是否位于 `WORKDIR`；
-  - MCP 工具的 allow / confirm / deny 策略。
 
 - `authorize_tool` 返回 `None` 表示允许，返回字符串表示拒绝原因。
-- 交互式批准按“cwd + 命令”或“MCP 工具 + 具体输入”缓存，同一进程内不会重复询问同一操作。
+- 交互式批准按“cwd + 命令”缓存，同一进程内不会重复询问同一操作。
 
 ### `src/agentLoop.py`
 
@@ -129,7 +128,7 @@ OK
 
 测试覆盖：
 
-- 权限分类、只读组合命令、路径越界和 MCP 策略。
+- 权限分类、只读组合命令、路径越界。
 - 交互式批准缓存。
 - 主循环、Goal 分支、后台等待和恢复时未知工具结果。
 - 上下文压缩、AGENTS.md 加载和 prompt cache。

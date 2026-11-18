@@ -14,7 +14,7 @@ from src.context import ContextManager, RecoveryState, block_type, is_prompt_too
 from src.schedule import CronJob, acknowledge_cron_jobs, consume_cron_queue, restore_cron_jobs
 from src.task import assemble_system_prompt, collect_background_results, has_pending_background, release_completed_assignment, should_run_background, start_background_task
 from src.team import consume_lead_inbox, format_team_events, has_tool_use
-from src.tool import assemble_tool_pool
+from src.tool import BUILTIN_HANDLERS, BUILTIN_TOOLS
 from src.schedule import cron_lock,cron_queue
 from src.tool_core import call_tool_handler
 from src.storage.sqlite_store import dumps
@@ -142,7 +142,6 @@ def _agent_loop(messages: list, context: dict, active_request: str, *, resume_ru
         trace.bind(session)
     session.checkpoint(messages)
     session.dispatch(messages)
-    tools, handlers = assemble_tool_pool()
     state = RecoveryState()
     max_tokens = DEFAULT_MAX_TOKENS
 
@@ -173,10 +172,9 @@ def _agent_loop(messages: list, context: dict, active_request: str, *, resume_ru
 
         prepare_context(messages, active_request, session)
         context = update_context(context, messages)
-        tools, handlers = assemble_tool_pool()
 
         try:
-            response = call_llm(messages, context, tools, state, max_tokens)
+            response = call_llm(messages, context, BUILTIN_TOOLS, state, max_tokens)
             session.tokens += sum(int(getattr(response.usage, key, 0) or 0) for key in
                                   ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
         except Exception as e:
@@ -273,7 +271,7 @@ def _agent_loop(messages: list, context: dict, active_request: str, *, resume_ru
             if should_run_background(block.name, block.input):
                 with observability.tool_span(block.name, block.input) as tool:
                     try:
-                        bg_id = start_background_task(block, handlers)
+                        bg_id = start_background_task(block, BUILTIN_HANDLERS)
                         output = (f"[Background task {bg_id} started] "
                                   "Result will arrive as a task_notification.")
                     except Exception as exc:
@@ -285,7 +283,7 @@ def _agent_loop(messages: list, context: dict, active_request: str, *, resume_ru
                                 "content": output})
                 continue
 
-            handler = handlers.get(block.name)
+            handler = BUILTIN_HANDLERS.get(block.name)
             session.runtime.db.event(session.run_id, "tool_started", {"name": block.name, "input": block.input, "tool_use_id": block.id})
             session.checkpoint(messages)
             with observability.tool_span(block.name, block.input) as tool:

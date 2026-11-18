@@ -10,7 +10,6 @@ import time
 from pathlib import Path
 
 from src.config import WORKDIR
-from src.mcp import connect_mcp, normalize_mcp_name,mcp_clients,MCP_HOST_POLICY
 from src.schedule import run_cancel_cron, run_list_crons, run_schedule_cron
 from src.team import run_request_plan, run_request_shutdown, run_review_plan, spawn_subagent, spawn_teammate_thread,BUS,active_teammates,team_lock
 from src.task import create_task, claim_task, complete_task, create_worktree, get_task_json, list_tasks, load_skill, update_task,assignment_cwd
@@ -164,13 +163,6 @@ def run_send_message(to: str, content: str) -> str:
         return f"Teammate '{to}' is not active"
     BUS.send("lead", to, content)
     return f"Sent to {to}"
-
-def run_connect_mcp(name: str) -> str:
-    return connect_mcp(name)
-
-
-
-
 
 
 
@@ -334,11 +326,6 @@ BUILTIN_TOOLS = [WORKFLOW_TOOL,
                                      "task_id": {"type": "string"}},
                       "required": ["name", "task_id"],
                       "additionalProperties": False}},
-    {"name": "connect_mcp",
-     "description": "Connect to an MCP server (docs, deploy) and discover tools.",
-     "input_schema": {"type": "object",
-                      "properties": {"name": {"type": "string"}},
-                      "required": ["name"]}},
 ]
 
 BUILTIN_HANDLERS = {
@@ -363,49 +350,4 @@ BUILTIN_HANDLERS = {
     "request_shutdown": run_request_shutdown,
     "request_plan": run_request_plan, "review_plan": run_review_plan,
     "create_worktree": run_create_worktree,
-    "connect_mcp": run_connect_mcp,
 }
-
-def assemble_tool_pool() -> tuple[list[dict], dict]:
-    """Merge builtin tools + all MCP tools into one pool."""
-    import src.mcp as mcp
-    tools = list(BUILTIN_TOOLS)
-    handlers = dict(BUILTIN_HANDLERS)
-    policies: dict[str, str] = {}
-    origins = {tool["name"]: f"built-in tool {tool['name']!r}"
-               for tool in tools}
-    for server_name, mcp_client in mcp_clients.items():
-        safe_server = normalize_mcp_name(server_name)
-        for tool_def in mcp_client.tools:
-            raw_name = tool_def["name"]
-            safe_tool = normalize_mcp_name(raw_name)
-            prefixed = f"mcp__{safe_server}__{safe_tool}"
-            if len(prefixed) > 64:
-                raise ValueError(
-                    f"MCP tool name is longer than 64 characters: {prefixed}"
-                )
-            origin = f"MCP tool {server_name!r}/{raw_name!r}"
-            if prefixed in origins:
-                raise ValueError(
-                    "MCP tool name collision after normalization: "
-                    f"{prefixed!r} maps both {origins[prefixed]} and {origin}"
-                )
-            schema = tool_def.get("inputSchema", {})
-            if not isinstance(schema, dict) or schema.get("type", "object") != "object":
-                raise ValueError(f"Invalid input schema for {origin}")
-            origins[prefixed] = origin
-            tools.append({
-                "name": prefixed,
-                "description": tool_def.get("description", ""),
-                "input_schema": schema,
-            })
-            handlers[prefixed] = (
-                lambda *, client=mcp_client, tool=raw_name, **kwargs:
-                client.call_tool(tool, kwargs)
-            )
-            policies[prefixed] = MCP_HOST_POLICY.get(
-                (server_name, raw_name), "confirm"
-            )
-    mcp.mcp_tool_policies.clear()
-    mcp.mcp_tool_policies.update(policies)
-    return tools, handlers

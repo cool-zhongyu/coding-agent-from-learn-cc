@@ -2,7 +2,6 @@
 
 This is an approval policy, not an operating-system sandbox.
 """
-import json
 import os
 import re
 import shlex
@@ -10,8 +9,6 @@ import threading
 from pathlib import Path
 from contextlib import contextmanager
 from contextvars import ContextVar
-
-import src.mcp as mcp
 
 PERMISSION_CWD = ContextVar("permission_cwd", default=None)
 
@@ -227,24 +224,4 @@ def authorize_tool(block) -> str | None:
         base = PERMISSION_CWD.get() or WORKDIR
         if not (base / path).resolve().is_relative_to(WORKDIR):
             return "Permission denied: path is outside the workspace"
-
-    if name.startswith("mcp__"):
-        policy = mcp.mcp_tool_policies.get(name, "confirm")
-        if policy == "deny":
-            return "Permission denied: MCP tool blocked by policy"
-        if policy != "allow":
-            if (
-                PermissionPolicy().mode == "unattended"
-                or threading.current_thread() is not threading.main_thread()
-            ):
-                return (
-                    "Permission denied: interactive MCP approval is unavailable "
-                    "during an asynchronous turn"
-                )
-            approval_key = (
-                f"mcp:{name}:"
-                f"{json.dumps(tool_input, ensure_ascii=False, sort_keys=True, default=str)}"
-            )
-            if not _approve_once(approval_key, f"MCP tool: {name}"):
-                return "Permission denied by user"
     return None

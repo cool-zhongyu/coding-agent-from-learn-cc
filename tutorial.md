@@ -18,7 +18,7 @@
 | 可控执行 | [07](#c07)、[08](#c08)、[09](#c09) | 接入权限、Planner 和 Goal 验收 |
 | 长任务 | [10](#c10)、[11](#c11)、[12](#c12) | 保存与恢复、控制上下文、运行确定的工作流 |
 | 协作和经验 | [13](#c13)、[14](#c14)、[15](#c15)、[16](#c16) | 做任务板、队友、后台任务、定时任务、记忆与 Skill |
-| 扩展和交付 | [17](#c17)、[18](#c18)、[19](#c19)、[20](#c20) | 理解 MCP、扩展工具、逐步复建、排错与验证 |
+| 扩展和交付 | [18](#c18)、[19](#c19)、[20](#c20) | 扩展工具、逐步复建、排错与验证 |
 | 查阅手册 | [21](#c21)、[22](#c22) | 查配置、限制、源码证据和完整流程 |
 
 源码版本说明：当前目录没有可用的 `.git` 仓库元数据，因此没有可提供的本地 commit ID。本文描述的是本次读取到的文件快照。没有把 `resume_output/` 下的简历材料作为功能证据，也没有读取或展示 `.env` 中的真实凭据。
@@ -75,7 +75,6 @@ Python：检查路径 → 读取磁盘 → 返回内容
 
 - 这是 Python 命令行程序，没有自带网页管理后台。
 - 模型通过 Anthropic Messages 风格接口调用，不是在本机训练大模型。
-- MCP 模块当前是进程内模拟器；模拟部署返回成功文本，不会真的发布服务。
 - Qdrant 是可选向量检索服务；没有配置时也能运行主流程。
 - `AgentRuntime.redis` 只是预留字段，没有 Redis 调度或分布式 worker 实现。
 - 队友是本进程的线程。关掉进程不会在另一台机器上继续工作。
@@ -173,7 +172,6 @@ demo_cc/
 │  ├─ schedule.py             cron 调度
 │  ├─ memory.py               长期记忆
 │  ├─ skill.py                Skill 检索和学习
-│  ├─ mcp.py                  模拟外部工具发现
 │  ├─ file_lock.py            Windows/POSIX文件锁兼容
 │  └─ storage/
 │     ├─ sqlite_store.py      本地数据库
@@ -505,7 +503,7 @@ flowchart TD
 
 ### 6.1 工具定义与实现分开
 
-`src/tool.py` 有 `BUILTIN_TOOLS` 和 `BUILTIN_HANDLERS`。前者发给模型，后者留在 Python 内执行。主循环每轮调用 `assemble_tool_pool()`，把内置工具与已连接的 MCP 工具合并。
+`src/tool.py` 有 `BUILTIN_TOOLS` 和 `BUILTIN_HANDLERS`。前者发给模型，后者留在 Python 内执行。主循环把工具定义发给模型，再按工具名称查找处理器。
 
 例如 `read_file` 的实际路径是：
 
@@ -578,9 +576,8 @@ output = call_tool_handler(handler, block.input, block.name)
 
 - `bash`：通过 `PermissionPolicy.classify()` / `check()` 判断 allow、ask 或 deny；
 - `read_file`、`write_file`、`edit_file`：路径必须位于整体 `WORKDIR` 内；
-- `mcp__*`：按 `mcp.mcp_tool_policies` 的 allow / confirm / deny 策略处理。
 
-交互式批准按“执行目录 + 命令”或“MCP 工具 + 具体输入”缓存。需要确认但当前处于 unattended 模式或后台线程时，直接拒绝而不是阻塞等待输入。
+交互式批准按“执行目录 + 命令”缓存。需要确认但当前处于 unattended 模式或后台线程时，直接拒绝而不是阻塞等待输入。
 
 ### 7.2 检查发生在哪里
 
@@ -1299,43 +1296,6 @@ description: 修改一个小功能后，按项目现有测试确认结果。
 
 选读 `PersistenceTests.test_skill_requires_distinct_verified_runs`，它验证同一 run 重复提交不会凑够次数。
 
-<a id="c17"></a>
-## 17｜MCP：理解工具发现机制，不把模拟器当真实服务
-
-### 17.1 先连接，再发现，再调用
-
-内置工具在源码里固定声明。MCP 风格的工具则先连接服务，再发现服务提供的工具，加入模型可见工具表。
-
-当前调用链：
-
-```text
-connect_mcp("docs")
-  → MOCK_SERVERS 找工厂
-  → 创建 MCPClient 并登记 tools/handlers
-  → 下一轮 assemble_tool_pool()
-  → 生成 mcp__docs__search 等名称
-  → 模型请求该工具
-  → authorize_tool 查询宿主策略
-  → client.call_tool()
-```
-
-`inputSchema` 被转换成模型需要的 `input_schema`。工具名称进行字符标准化、长度检查和冲突检查，避免两个不同原始名字归一化后撞名。
-
-### 17.2 当前提供哪些模拟服务
-
-| 服务/工具 | 宿主策略 | 实际行为 |
-|---|---|---|
-| docs/search | allow | 返回模拟搜索文本 |
-| docs/get_version | allow | 返回固定版本文本 |
-| deploy/status | allow | 返回模拟运行状态 |
-| deploy/trigger | confirm | 确认后返回模拟部署文本 |
-
-授权来自 `MCP_HOST_POLICY`，合并后保存在 `mcp_tool_policies`，不是相信服务端自称 `readOnlyHint=true` 就允许。未知工具策略默认 confirm。
-
-当前没有真正的 stdio/HTTP MCP 传输、远程握手、鉴权和连接重试。若要接真实 MCP，应替换客户端的传输与发现实现，同时保留工具命名、校验和宿主权限边界。
-
-**验收：** 调用 connect 后重新组装工具表，能看见带服务前缀的工具；明确知道模拟 deploy 并未真实部署。
-
 <a id="c18"></a>
 ## 18｜如何增加一个新工具：完整的小练习
 
@@ -1429,7 +1389,7 @@ def run_agent_count_lines(path: str) -> str:
 | M9 | task、team、file_lock | 任务依赖、领取、邮箱、队友协议 | 不能重复领取，过时审批不生效 |
 | M10 | 后台分发、schedule | 后台通知、waiting、cron 投递与确认 | 等待不空转模型，重载 durable 任务 |
 | M11 | memory、skill | 提取、持久化、检索、两次成功晋升 | 临时状态不进入长期记忆 |
-| M12 | vector_store、mcp | 外部适配与故障降级 | 外部服务故障不阻断基本功能 |
+| M12 | vector_store | 外部适配与故障降级 | 外部服务故障不阻断基本功能 |
 
 ### 19.3 拆文件时避免循环导入
 
@@ -1547,9 +1507,9 @@ if __name__ == "__main__":
 
 本次执行了现有完整离线测试和 Python 语法解析。该结果验证了测试覆盖到的逻辑，不证明全部真实外部服务、所有 shell 语法和所有并发情况都正确。
 
-文档自身还做了检查：22 个章节锚点与目录一致，源码链接对应的文件存在，代码围栏成对闭合，Python 示例通过语法解析（单独的字典注册条目按片段处理）。第 04 章完整教学示例用假模型验证了两轮工具调用、结果 ID 配对、最终文本输出、文件缺失和路径越界；第 20 章权限练习实际运行通过。这些示例验证没有发出真实模型请求。
+文档自身还做了检查：21 个章节锚点与目录一致，源码链接对应的文件存在，代码围栏成对闭合，Python 示例通过语法解析（单独的字典注册条目按片段处理）。第 04 章完整教学示例用假模型验证了两轮工具调用、结果 ID 配对、最终文本输出、文件缺失和路径越界；第 20 章权限练习实际运行通过。这些示例验证没有发出真实模型请求。
 
-未实际运行：真实模型端到端任务、真实 embedding/Qdrant、真实 MCP 传输、worktree 创建、多进程竞争压力测试、全天候 cron 运行。MCP 真实传输本身也尚未实现，不能写成“已验证连接真实服务”。
+未实际运行：真实模型端到端任务、真实 embedding/Qdrant、worktree 创建、多进程竞争压力测试、全天候 cron 运行。
 
 <a id="c21"></a>
 ## 21｜配置、限制与维护手册
@@ -1636,7 +1596,7 @@ if __name__ == "__main__":
 | 一次请求的状态在哪里？ | [lifecycle.py](D:/agent/demo_cc/src/lifecycle.py) | TurnSession、checkpoint、dispatch、finish |
 | 怎样选择执行方式？ | [planner.py](D:/agent/demo_cc/src/planner.py) | ExecutionPlan、plan_request |
 | 谁判定任务完成？ | [goal.py](D:/agent/demo_cc/src/goal.py) | CheckedGoalEvaluator、GoalController |
-| 工具怎样登记？ | [tool.py](D:/agent/demo_cc/src/tool.py) | BUILTIN_TOOLS、BUILTIN_HANDLERS、assemble_tool_pool |
+| 工具怎样登记？ | [tool.py](D:/agent/demo_cc/src/tool.py) | BUILTIN_TOOLS、BUILTIN_HANDLERS |
 | 工具实际如何操作磁盘？ | [tool_core.py](D:/agent/demo_cc/src/tool_core.py) | safe_path、run_read、run_write、_run_bash_process |
 | 为什么询问权限？ | [permissions.py](D:/agent/demo_cc/src/permissions.py) | authorize_tool、classify、check |
 | 怎样判断工作区范围？ | [workspace_permissions.py](D:/agent/demo_cc/src/workspace_permissions.py) | trusted_command、inside_workspace、scoped_operation |
@@ -1647,7 +1607,6 @@ if __name__ == "__main__":
 | 到时间怎样继续？ | [schedule.py](D:/agent/demo_cc/src/schedule.py) | cron_matches、cron_scheduler_loop、acknowledge_cron_jobs |
 | 长期记忆从哪里来？ | [memory.py](D:/agent/demo_cc/src/memory.py) | extract_memories、load_memories、rebuild_memory_index |
 | 技巧怎样晋升？ | [skill.py](D:/agent/demo_cc/src/skill.py) | save_skill_candidate、promote_skill、retrieve_skills |
-| 外部工具怎样加入？ | [mcp.py](D:/agent/demo_cc/src/mcp.py) | MCPClient、MCP_HOST_POLICY、connect_mcp |
 | 数据库怎样持久化？ | [sqlite_store.py](D:/agent/demo_cc/src/storage/sqlite_store.py) | SQLiteStore、put、get、event |
 | 记忆旧版本怎样保留？ | [memory_repo.py](D:/agent/demo_cc/src/storage/memory_repo.py) | MemoryRepository.upsert |
 | 向量检索如何降级？ | [vector_store.py](D:/agent/demo_cc/src/storage/vector_store.py) | VectorStore、index、search |

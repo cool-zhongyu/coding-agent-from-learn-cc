@@ -87,14 +87,6 @@ class PermissionTests(unittest.TestCase):
         for command in ["rm file", "git reset --hard", "python -c evil", "git status; rm file", "shutdown /s"]:
             self.assertIsNotNone(policy.check(command, lambda _: self.fail("must not ask")))
 
-    def test_mcp_policy_is_shared(self):
-        from src import mcp
-        from src.permissions import authorize_tool
-        mcp.mcp_tool_policies["mcp__test__read"] = "allow"
-        self.assertIsNone(authorize_tool(SimpleNamespace(name="mcp__test__read", input={})))
-        mcp.mcp_tool_policies["mcp__test__read"] = "deny"
-        self.assertIsNotNone(authorize_tool(SimpleNamespace(name="mcp__test__read", input={})))
-
 
 class ToolAuthorizationTests(unittest.TestCase):
     def test_interactive_approval_is_remembered_per_exact_key(self):
@@ -268,7 +260,7 @@ class LoopTests(unittest.TestCase):
         context = {}
         with patch("src.lifecycle.plan_request", return_value=ExecutionPlan(goal="read")), \
              patch.object(loop, "call_llm", side_effect=responses), \
-             patch.object(loop, "assemble_tool_pool", return_value=([], {"read_file": lambda **kwargs: "actual evidence"})), \
+             patch.object(loop, "BUILTIN_HANDLERS", {"read_file": lambda **kwargs: "actual evidence"}), \
              patch("src.goal.PromptGoalEvaluator.evaluate", return_value=GoalEvaluation(True, "done")), \
              patch("src.context.remember_after_turn"), patch("src.skill.evaluate_candidate"):
             loop.agent_loop(history, context, "read")

@@ -25,7 +25,6 @@ from src.config import (
     TRANSCRIPT_DIR,
     MODEL,
 )
-from src.mcp import mcp_clients
 import src.observability as observability
 from src.permissions import PERMISSION_CWD
 
@@ -467,7 +466,6 @@ def update_context(context: dict, messages: list, refresh=False) -> dict:
         result["episodes"] = (
             json.dumps(episodes, ensure_ascii=False)[:12000] if episodes else ""
         )
-    result["connected_mcp"] = list(mcp_clients.keys())
     result["active_teammates"] = list(active_teammates.keys())
     return result
 

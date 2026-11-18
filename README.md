@@ -86,7 +86,6 @@ CLI 支持 `/langfuse` 查看 tracing 状态和最近 trace URL，以及
 无法静态判断目标的脚本/解释器、动态 shell 展开仍需确认；这不是只检查起始 cwd 的无条件放行。
 `unattended` 永不提问，需要确认的操作直接拒绝。线程中的普通安全命令可执行。
 这是命令审批策略，不是 OS 沙箱；测试本身仍可能执行项目代码。
-MCP 工具策略统一保存在 `src.mcp.mcp_tool_policies`。
 
 只读组合命令会逐段判断：允许工作区内的 `cd ... &&`、只读命令之间的 `|`/`&&`，
 以及输出到 `/dev/null` 的 `>`/`2>`。例如在 `WORKDIR=/mnt/d/youting` 时，
